@@ -1,0 +1,22 @@
+digraph Step2 {
+  graph [fontname="DejaVu Sans", bgcolor="white", rankdir=TB, nodesep="0.30", ranksep="0.42", pad="0.23", dpi="160"];
+  node [fontname="DejaVu Sans", fontsize=11, shape=box, style="rounded,filled", penwidth=1.2, margin="0.16,0.12", color="#8DA8C0", fillcolor="#EEF5FC", fontcolor="#203B54"];
+  edge [fontname="DejaVu Sans",fontsize=9,color="#74869A", arrowsize=0.7];
+  start [label="Отримано підписану транзакцію", fillcolor="#DCE9FA"];
+  signature [label="1. Формат і цифровий підпис\nкоректні?"];
+  dup [label="2. TXID відсутній у мемпулі\nі підтвердженій історії?"];
+  nonce [label="3. nonce дорівнює очікуваному\nз урахуванням pending?"];
+  funds [label="4. Підтверджений баланс − резерв\n≥ сума + комісія?"];
+  accepted [label="Додати до локального мемпулу", fillcolor="#D5EEE1", color="#72A98C",fontcolor="#205B3F"];
+  rejected [label="Відхилити, повернути\nкод і причину",fillcolor="#F8E3E1",color="#C78D8D",fontcolor="#843C3C"];
+  start -> signature;
+  signature -> dup [label="Так"];
+  dup -> nonce [label="Так"];
+  nonce -> funds [label="Так"];
+  funds -> accepted [label="Так"];
+  signature -> rejected [label="Ні",constraint=false];
+  dup -> rejected [label="Ні",constraint=false];
+  nonce -> rejected [label="Ні",constraint=false];
+  funds -> rejected [label="Ні"];
+  {rank=same; funds; rejected}
+}

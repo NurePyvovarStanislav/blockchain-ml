@@ -1,0 +1,25 @@
+INITIAL BALANCES: Alice=100, Bob=0, Charlie=0
+TX1: Alice -> Bob 70     accepted=True  code=accepted
+Reserved by Alice: 72
+Alice available: 28
+TX2: over-spend          accepted=False code=insufficient_funds
+  reason: Available 28, but needs 31 including fee
+TX3: wrong nonce         accepted=False code=invalid_nonce
+  reason: Expected sender nonce 1, got 7
+TX1 repeated             accepted=False code=duplicate
+  reason: Transaction is already in the mempool
+TX1 amount tampered      accepted=False code=invalid_signature
+  reason: Invalid transaction format or signature
+TX4: Alice -> Charlie 20 accepted=True  code=accepted
+Mempool size: 2
+Alice available: 7
+
+SIMULATED CONFIRMATION (blocks are introduced in Step 3):
+Confirm TX1              accepted=True  code=confirmed
+Dropped pending after state change: 1
+Confirmed Alice balance: 28
+Confirmed Bob balance: 70
+Unclaimed fees for future miner: 2
+Pending TXIDs: ['e48337bece67']
+TX1 repeat confirmed     accepted=False code=duplicate
+  reason: Transaction is already confirmed
