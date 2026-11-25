@@ -1,8 +1,7 @@
 """Step 2: confirmed account state of the educational blockchain.
 
-This is a local, testable state-machine prototype, NOT a blockchain yet.
-`initial_balances` may be supplied only by trusted demo/test genesis setup.
-In steps 3-5 balances will be reconstructed by validating the genesis/block history.
+The chain layer reconstructs this state from genesis and validated blocks.
+`initial_balances` remains available for isolated Step 2–4 demos/tests only.
 """
 
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from collections.abc import Mapping
 import re
 
 from .transaction import Transaction
+from .coinbase import CoinbaseTransaction
 
 _ADDRESS = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -37,8 +37,8 @@ def rejected(code: str, reason: str) -> ValidationResult:
 class LedgerState:
     """Confirmed balances/nonces and IDs of already executed transactions.
 
-    Fee amounts are held in `unclaimed_fees` pending the future miner reward
-    mechanism (Step 4); they are not silently destroyed or paid out twice.
+    Fee amounts are held in `unclaimed_fees` until the validated block
+    settles its coinbase; they are not destroyed or paid out twice.
     """
 
     def __init__(self, initial_balances: Mapping[str, int] | None = None):
@@ -92,7 +92,7 @@ class LedgerState:
         return OK
 
     def apply_confirmed(self, tx: Transaction) -> ValidationResult:
-        """Demonstrate confirmation. In the real chain, call only after block validation.
+        """Apply a normal transfer to a working state after its checks.
 
         All checks occur before mutating balances/nonces/confirmed IDs.
         """
@@ -123,3 +123,32 @@ class LedgerState:
         self._unclaimed_fees += tx.fee
         self._confirmed_txids.add(tx.txid)
         return ValidationResult(True, "confirmed", "Transaction applied to confirmed state")
+
+    def copy(self) -> "LedgerState":
+        """Independent working state; AccountState values are immutable."""
+        clone = LedgerState()
+        clone._accounts = self._accounts.copy()
+        clone._confirmed_txids = self._confirmed_txids.copy()
+        clone._unclaimed_fees = self._unclaimed_fees
+        return clone
+
+    def _apply_coinbase(self, tx: CoinbaseTransaction, subsidy: int) -> ValidationResult:
+        """Internal settlement: chain validation must authorize height and PoW first.
+
+        Called only after all normal transactions in this block have succeeded.
+        The fee accumulator must have been zero at the beginning of the block.
+        """
+        if type(tx) is not CoinbaseTransaction or type(subsidy) is not int or subsidy < 1:
+            return rejected("invalid_coinbase", "Invalid coinbase or subsidy")
+        if self.was_confirmed(tx.txid):
+            return rejected("duplicate", "Coinbase is already confirmed")
+        if tx.amount != subsidy + self._unclaimed_fees:
+            return rejected("invalid_coinbase", "Reward must equal subsidy plus collected fees")
+        account = self.account(tx.recipient)
+        self._accounts[tx.recipient] = AccountState(
+            balance=account.balance + tx.amount,
+            next_nonce=account.next_nonce,
+        )
+        self._confirmed_txids.add(tx.txid)
+        self._unclaimed_fees = 0
+        return ValidationResult(True, "confirmed", "Miner reward credited")
