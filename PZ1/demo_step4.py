@@ -68,7 +68,7 @@ def main() -> None:
     print("Mining difficulty:", candidate.header.difficulty)
     print("Fixed subsidy:", policy.fixed_subsidy)
     print("Transaction fees:", tx1.fee + tx2.fee)
-    print("Coinbase reward:", reward.amount)
+    print("Coinbase reward:", reward.amount) # type: ignore
     print("First transaction is coinbase:", candidate.transactions[0] is reward)
 
     result = mine_block(candidate, max_attempts=1_000_000)
@@ -85,7 +85,7 @@ def main() -> None:
     print("Merkle Root valid:", mined.has_valid_merkle_root())
 
     # Prove that finding SHA-256 PoW cannot authorize an inflated coinbase.
-    forged_coinbase = replace(reward, amount=reward.amount + 100)
+    forged_coinbase = replace(reward, amount=reward.amount + 100) # type: ignore
     forged_candidate = Block.create(
         height=1, timestamp=candidate.header.timestamp,
         previous_hash=genesis.hash,
