@@ -125,6 +125,23 @@ class Blockchain:
     def balance(self, address: str) -> int:
         return self._state.balance(address)
 
+    def account_summary(self, address: str) -> dict:
+        """A consistent view of both confirmed state and the local mempool.
+
+        Caller must hold the node lock when used by a concurrent HTTP node.
+        Unconfirmed incoming transfers are deliberately not spendable.
+        """
+        balance = self._state.balance(address)
+        reserved = self._pool.reserved(address)
+        return {
+            "address": address,
+            "balance": balance,
+            "next_nonce": self._state.next_nonce(address),
+            "reserved": reserved,
+            "available_balance": balance - reserved,
+            "expected_nonce": self._pool.expected_nonce(address, self._state),
+        }
+
     def pending(self) -> tuple[Transaction, ...]:
         return self._pool.transactions()
 

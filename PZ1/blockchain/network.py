@@ -67,8 +67,9 @@ def decode_history(data):
 
 
 class Node:
-    def __init__(self, address, peers=()):
+    def __init__(self, address, peers=(), *, instance_id=None):
         self.address = peer_url(address)
+        self.instance_id = instance_id
         self.lock = RLock()
         self.chain = Blockchain()
         self.peers = set()
@@ -107,12 +108,15 @@ class Node:
 
     def status(self):
         with self.lock:
-            return {'node': self.address, 'pid': os.getpid(), 'online': self.online, 'peers': sorted(self.peers),
+            data = {'node': self.address, 'pid': os.getpid(), 'online': self.online, 'peers': sorted(self.peers),
                     'height': self.chain.tip.header.height, 'tip': self.chain.tip.hash,
                     'work': chain_work(self.chain.blocks),
                     'pending': [tx.txid for tx in self.chain.pending()],
                     'relay_queue_size': self._relay_queue.qsize(),
                     'relay_errors': list(self._relay_errors)}
+            if self.instance_id is not None:
+                data['instance_id'] = self.instance_id
+            return data
 
     def _record_relay_error(self, peer, path, exc):
         with self.lock:
@@ -258,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
 
     @property
     def node(self):
-        return self.server.node
+        return self.server.node # type: ignore
 
     def respond(self, data, status=200):
         raw = json.dumps(data, allow_nan=False).encode('utf-8')
@@ -355,9 +359,7 @@ class Handler(BaseHTTPRequestHandler):
         elif re.fullmatch(r'/balance/[0-9a-f]{64}', self.path):
             address = self.path.rsplit('/', 1)[1]
             with self.node.lock:
-                ledger = self.node.chain.ledger
-                data = {'address': address, 'balance': ledger.balance(address),
-                        'next_nonce': ledger.next_nonce(address)}
+                data = self.node.chain.account_summary(address)
             self.respond(data)
         elif self.path == '/peer/chain':
             with self.node.lock:
@@ -399,10 +401,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def serve(port, peers=()):
-    node = Node(f'http://127.0.0.1:{port}', peers)
+def serve(port, peers=(), *, instance_id=None):
+    node = Node(f'http://127.0.0.1:{port}', peers, instance_id=instance_id)
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    server.node = node
+    server.node = node # type: ignore
     print(f'Node ready: {node.address}; peers={sorted(node.peers)}', flush=True)
     try:
         server.serve_forever()
