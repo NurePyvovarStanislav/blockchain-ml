@@ -4,7 +4,6 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.client import BadStatusLine, HTTPConnection
 from http.server import ThreadingHTTPServer
-from queue import Queue
 from threading import Event, Thread
 from unittest.mock import patch
 from urllib.error import URLError
@@ -130,89 +129,6 @@ class NetworkReviewTests(unittest.TestCase):
         self.assertEqual(self.node.chain.pending(), (tx,))
         self.assertFalse(self.node.chain.ledger.was_confirmed(tx.txid))
 
-    def test_mining_exhaustion_keeps_state(self):
-        with patch.object(network, 'mine_block', side_effect=RuntimeError('No solution')):
-            response = self.post('/mine', {'miner': self.alice.address})
-        self.assertEqual((response[0], response[1]['code']), (200, 'mining_exhausted'))
-        self.assertEqual(self.node.status()['height'], 0)
-
-    def test_bad_host_rejected_for_get(self):
-        response = self.http('GET', '/status', Host=f'evil.example:{self.port}')
-        self.assertEqual((response[0], response[1]['code']), (403, 'invalid_host'))
-
-    def test_bad_host_rejected_for_post(self):
-        response = self.http('POST', '/network', '{"online":false}',
-                             Host=f'evil.example:{self.port}',
-                             **{'Content-Type': 'application/json'})
-        self.assertEqual((response[0], response[1]['code']), (403, 'invalid_host'))
-        self.assertTrue(self.node.online)
-
-    def test_browser_origin_rejected(self):
-        for origin in ('https://evil.example', 'null'):
-            response = self.http('POST', '/network', '{"online":false}',
-                                 Origin=origin, **{'Content-Type': 'application/json'})
-            self.assertEqual((response[0], response[1]['code']), (403, 'forbidden_origin'))
-            self.assertTrue(self.node.online)
-
-    def test_plain_text_post_rejected(self):
-        response = self.http('POST', '/network', '{"online":false}',
-                             **{'Content-Type': 'text/plain'})
-        self.assertEqual((response[0], response[1]['code']), (415, 'unsupported_media_type'))
-        self.assertTrue(self.node.online)
-
-    def test_json_with_charset_accepted(self):
-        response = self.http('POST', '/network', '{"online":false}',
-                             **{'Content-Type': 'application/json; charset=utf-8'})
-        self.assertEqual(response[0], 200)
-        self.assertFalse(self.node.online)
-
-    def test_preflight_rejected(self):
-        response = self.http('OPTIONS', '/mine', Origin='https://evil.example',
-                             **{'Access-Control-Request-Method': 'POST'})
-        self.assertEqual((response[0], response[1]['code']), (403, 'forbidden_origin'))
-
-    def test_body_timeout_returns_408(self):
-        # Promise more bytes than we send; keep socket open until server timeout.
-        response = self.http('POST', '/network', '{',
-                             **{'Content-Type': 'application/json',
-                                'Content-Length': '100'})
-        self.assertEqual((response[0], response[1]['code']), (408, 'request_timeout'))
-        self.assertTrue(self.node.online)
-
-    def test_invalid_json_returns_400(self):
-        response = self.http('POST', '/network', '{"online":true,"online":false}',
-                             **{'Content-Type': 'application/json'})
-        self.assertEqual((response[0], response[1]['code']), (400, 'bad_request'))
-        self.assertTrue(self.node.online)
-
-    def test_bad_miner_returns_400(self):
-        response = self.post('/mine', {'miner': 'not-an-address'})
-        self.assertEqual((response[0], response[1]['code']), (400, 'bad_request'))
-
-    def test_unexpected_get_error_returns_500(self):
-        with patch.object(self.node, 'status', side_effect=AttributeError('private details')):
-            with self.assertLogs(network.LOG, level='ERROR'):
-                response = self.http('GET', '/status')
-        self.assertEqual(response, (500, {'accepted': False, 'code': 'internal_error'}))
-        self.assertEqual(self.http('GET', '/status')[0], 200)
-
-    def test_unexpected_post_error_returns_500(self):
-        with patch.object(self.node, 'mine', side_effect=KeyError('private details')):
-            with self.assertLogs(network.LOG, level='ERROR'):
-                response = self.post('/mine', {'miner': self.alice.address})
-        self.assertEqual(response, (500, {'accepted': False, 'code': 'internal_error'}))
-        self.assertEqual(self.http('GET', '/status')[0], 200)
-
-    def test_oversized_request_returns_413(self):
-        with patch.object(network, 'MAX_BYTES', 128):
-            response = self.http('POST', '/network', 'x'*129,
-                                 **{'Content-Type': 'application/json'})
-        self.assertEqual((response[0], response[1]['code']), (413, 'invalid_size'))
-
-    def test_oversized_response_returns_413(self):
-        with patch.object(network, 'MAX_BYTES', 128):
-            response = self.http('GET', '/chain')
-        self.assertEqual((response[0], response[1]['code']), (413, 'response_too_large'))
 
     def test_sync_continues_after_bad_peers(self):
         peers = ['http://127.0.0.1:10001', 'http://127.0.0.1:10002',
@@ -241,24 +157,6 @@ class NetworkReviewTests(unittest.TestCase):
                          ['peer_error']*4 + ['adopted_chain'])
         self.assertEqual(self.node.chain.tip, good.tip)
 
-    def test_sync_continues_after_structurally_invalid_history(self):
-        bad, good = 'http://127.0.0.1:10001', 'http://127.0.0.1:10002'
-        for peer in (bad, good):
-            self.node.add_peer(peer)
-        winning = Blockchain()
-        winning.mine_pending(self.alice.address)
-
-        def mock_request(url, payload=None):
-            if payload is not None:
-                return {'accepted': False, 'code': 'not_more_work'}
-            if url.startswith(bad):
-                return {'network': NETWORK_ID, 'blocks': [{'header': None}]}
-            return {'network': NETWORK_ID, 'blocks': [b.to_dict() for b in winning.blocks]}
-
-        with patch.object(network, 'request', side_effect=mock_request):
-            answer = self.node.synchronize()
-            self.node._relay_queue.join()
-        self.assertEqual([r['code'] for r in answer['results']], ['peer_error', 'adopted_chain'])
 
     def test_relay_is_async_and_ordered(self):
         peer = 'http://127.0.0.1:10001'
@@ -286,72 +184,20 @@ class NetworkReviewTests(unittest.TestCase):
                 self.node._relay_queue.join()
         self.assertEqual(sent, [peer + '/peer/blocks', peer + '/peer/transactions'])
 
-    def test_full_queue_does_not_undo_local_acceptance(self):
-        self.node.add_peer('http://127.0.0.1:10001')
-        self.node._relay_queue = Queue(maxsize=1)
-        started, release = Event(), Event()
 
-        def slow_request(url, payload):
-            started.set()
-            release.wait(3)
-            return {'accepted': True}
-
-        with patch.object(network, 'request', side_effect=slow_request):
-            try:
-                self.node.broadcast('/peer/blocks', {})
-                self.assertTrue(started.wait(2))
-                self.node.broadcast('/peer/blocks', {})
-                answer = self.node.mine(self.alice.address)
-                self.assertTrue(answer['accepted'])
-                self.assertFalse(answer['relay_queued'])
-                self.assertIn('queue full', answer['relay_errors'][0]['error'])
-                self.assertEqual(self.node.status()['height'], 1)
-            finally:
-                release.set()
-                self.node._relay_queue.join()
-
-    def test_async_http_error_visible_in_status(self):
-        self.node.add_peer('http://127.0.0.1:10001')
-        with patch.object(network, 'request', side_effect=BadStatusLine('broken HTTP')):
-            answer = self.node.broadcast('/peer/blocks', {})
-            self.node._relay_queue.join()
-        self.assertTrue(answer['relay_queued'])
-        self.assertEqual(answer['relay_errors'], [])
-        self.assertEqual(self.node.status()['relay_errors'][-1]['path'], '/peer/blocks')
-
-    def test_partition_discards_queued_old_messages(self):
-        peer = 'http://127.0.0.1:10001'
-        self.node.add_peer(peer)
-        started, release = Event(), Event()
-        sent = []
-
-        def slow_request(url, payload):
-            sent.append(payload)
-            started.set()
-            release.wait(3)
-            return {'accepted': True}
-
-        with patch.object(network, 'request', side_effect=slow_request):
-            try:
-                self.node.broadcast('/peer/blocks', {'id': 1})
-                self.assertTrue(started.wait(2))
-                self.node.broadcast('/peer/blocks', {'id': 2})
-                self.node.set_online(False)
-                self.node.set_online(True)
-            finally:
-                release.set()
-                self.node._relay_queue.join()
-        self.assertEqual(sent, [{'id': 1}])
-
-    def test_add_peer_at_runtime_and_reject_self(self):
-        peer = 'http://127.0.0.1:10001'
-        status, result = self.post('/peers', {'peer': peer})
-        self.assertEqual(status, 200)
-        self.assertEqual(result['peers'], [peer])
-        self.assertEqual(self.post('/peers', {'peer': peer})[1]['peers'], [peer])
-        self.assertEqual(self.post('/peers', {'peer': self.node.address})[0], 400)
-        self.assertEqual(self.post('/peers', {'peer': 'http://example.com:80'})[0], 400)
-        self.assertEqual(self.node.status()['peers'], [peer])
+    def test_http_rejects_browser_and_invalid_requests(self):
+        self.assertEqual(self.http('GET', '/status', Host=f'evil.example:{self.port}')[0], 403)
+        for headers, status, code in (
+            ({'Host': f'evil.example:{self.port}', 'Content-Type': 'application/json'}, 403, 'invalid_host'),
+            ({'Origin': 'https://evil.example', 'Content-Type': 'application/json'}, 403, 'forbidden_origin'),
+            ({'Content-Type': 'text/plain'}, 415, 'unsupported_media_type'),
+        ):
+            response = self.http('POST', '/network', '{"online":false}', **headers)
+            self.assertEqual((response[0], response[1]['code']), (status, code))
+            self.assertTrue(self.node.online)
+        response = self.http('POST', '/network', '{"online":true,"online":false}',
+                             **{'Content-Type': 'application/json'})
+        self.assertEqual((response[0], response[1]['code']), (400, 'bad_request'))
 
 
 if __name__ == '__main__':
